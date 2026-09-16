@@ -111,7 +111,13 @@ disallow_untyped_defs = false
 docstring-code-format = true  # Formats code blocks in docstrings
 
 [tool.ruff.lint]
+# Pyflakes plus the pycodestyle checks worth enforcing; `ignore` and
+# `per-file-ignores` below subtract from this set.
 select = [
+    "E4",  # pycodestyle — imports
+    "E7",  # pycodestyle — statements
+    "E9",  # pycodestyle — syntax and IO errors
+    "F",   # Pyflakes — undefined names, unused imports and variables
     #"ALL"  # Enable all rules by default (TODO)
 ]
 ignore = [
