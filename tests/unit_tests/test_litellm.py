@@ -650,3 +650,10 @@ def test_top_p_and_top_k_in_default_params() -> None:
     client_params = llm._client_params
     assert client_params["top_p"] == 0.8
     assert client_params["top_k"] == 40
+
+
+def test_top_p_and_top_k_default_to_none() -> None:
+    """When unset, top_p/top_k should be present but None (litellm drops them)."""
+    llm = ChatLiteLLM(model="gpt-4o-mini")
+    assert llm._default_params["top_p"] is None
+    assert llm._default_params["top_k"] is None
