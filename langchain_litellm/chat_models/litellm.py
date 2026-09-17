@@ -53,7 +53,10 @@ from langchain_core.messages import (
     ToolCall,
     ToolCallChunk,
     ToolMessage,
+    ToolMessageChunk,
 )
+
+from langchain_core.messages.tool import invalid_tool_call
 from langchain_core.messages.ai import (
     InputTokenDetails,
     OutputTokenDetails,
@@ -120,6 +123,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
         additional_kwargs = {}
         tool_calls = []
+        invalid_tool_calls = []
 
         if _dict.get("function_call"):
             additional_kwargs["function_call"] = dict(_dict["function_call"])
@@ -156,14 +160,31 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 
                         # Handle JSON String arguments (e.g., OpenAI)
                         if isinstance(func_args, str):
+                            raw_func_args = func_args
                             try:
                                 func_args = json.loads(func_args)
                             except json.JSONDecodeError:
-                                pass  # Keep as string or empty if strictly required
+                                invalid_tool_calls.append(
+                                    invalid_tool_call(
+                                        name=func_name or "",
+                                        args=raw_func_args,
+                                        id=tc_id,
+                                        error=None,
+                                    )
+                                )
+                                continue
 
                         # Ensure args is a dict (e.g., already parsed Dict from Vertex)
                         if not isinstance(func_args, dict):
-                            func_args = {}
+                            invalid_tool_calls.append(
+                                invalid_tool_call(
+                                    name=func_name or "",
+                                    args=str(func_args),
+                                    id=tc_id,
+                                    error=None,
+                                )
+                            )
+                            continue
 
                         tool_calls.append(
                             ToolCall(
@@ -186,7 +207,10 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
             additional_kwargs["provider_specific_fields"] = provider_specific_fields
 
         return AIMessage(
-            content=content, additional_kwargs=additional_kwargs, tool_calls=tool_calls
+            content=content,
+            additional_kwargs=additional_kwargs,
+            tool_calls=tool_calls,
+            invalid_tool_calls=invalid_tool_calls,
         )
 
     elif role == "system":
@@ -202,26 +226,28 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
 def _convert_delta_to_message_chunk(
     delta: Union[Delta, Dict[str, Any]], default_class: Type[BaseMessageChunk]
 ) -> BaseMessageChunk:
-    # Handle both Delta objects and dicts
+    # Read values from dictionary-based deltas.
     if isinstance(delta, dict):
         role = delta.get("role")
         content = delta.get("content") or ""
         function_call = delta.get("function_call")
         raw_tool_calls = delta.get("tool_calls")
         reasoning_content = delta.get("reasoning_content")
-        # Check standard field first, then fallback to Vertex specific field
+
+        # Check standard field first, then fallback to Vertex-specific field.
         provider_specific_fields = delta.get("provider_specific_fields")
         if not provider_specific_fields:
             provider_specific_fields = delta.get("vertex_ai_grounding_metadata")
+
+    # Read values from LiteLLM Delta objects.
     else:
-        # Safely access attributes with getattr
         role = getattr(delta, "role", None)
         content = getattr(delta, "content", "") or ""
         function_call = getattr(delta, "function_call", None)
         raw_tool_calls = getattr(delta, "tool_calls", None)
         reasoning_content = getattr(delta, "reasoning_content", None)
 
-        # Check standard field first, then fallback to Vertex specific field
+        # Check standard field first, then fallback to Vertex-specific field.
         provider_specific_fields = getattr(delta, "provider_specific_fields", None)
         if not provider_specific_fields:
             provider_specific_fields = getattr(
@@ -229,8 +255,14 @@ def _convert_delta_to_message_chunk(
             )
 
     additional_kwargs = {}
+
     if function_call:
-        additional_kwargs["function_call"] = dict(function_call)
+        additional_kwargs["function_call"] = (
+            dict(function_call)
+            if not isinstance(function_call, dict)
+            else function_call
+        )
+
     if reasoning_content:
         additional_kwargs["reasoning_content"] = reasoning_content
 
@@ -238,35 +270,44 @@ def _convert_delta_to_message_chunk(
         additional_kwargs["provider_specific_fields"] = provider_specific_fields
 
     tool_call_chunks = []
+
     if raw_tool_calls:
         additional_kwargs["tool_calls"] = raw_tool_calls
+
         try:
             tool_call_chunks = [
                 ToolCallChunk(
-                    name=rtc["function"]["name"]
-                    if isinstance(rtc, dict)
-                    else rtc.function.name,
-                    args=rtc["function"]["arguments"]
-                    if isinstance(rtc, dict)
-                    else rtc.function.arguments,
+                    name=(
+                        rtc["function"]["name"]
+                        if isinstance(rtc, dict)
+                        else rtc.function.name
+                    ),
+                    args=(
+                        rtc["function"]["arguments"]
+                        if isinstance(rtc, dict)
+                        else rtc.function.arguments
+                    ),
                     id=rtc["id"] if isinstance(rtc, dict) else rtc.id,
                     index=rtc["index"] if isinstance(rtc, dict) else rtc.index,
                 )
                 for rtc in raw_tool_calls
             ]
-        except KeyError:
-            pass
+        except (KeyError, AttributeError, TypeError):
+            tool_call_chunks = []
 
     if role == "user" or default_class == HumanMessageChunk:
         return HumanMessageChunk(content=content)
+
     elif role == "assistant" or default_class == AIMessageChunk:
         return AIMessageChunk(
             content=content,
             additional_kwargs=additional_kwargs,
             tool_call_chunks=tool_call_chunks,
         )
+
     elif role == "system" or default_class == SystemMessageChunk:
         return SystemMessageChunk(content=content)
+
     elif role == "function" or default_class == FunctionMessageChunk:
         if isinstance(delta, dict):
             func_args = function_call.get("arguments", "") if function_call else ""
@@ -274,9 +315,28 @@ def _convert_delta_to_message_chunk(
         else:
             func_args = function_call.arguments if function_call else ""
             func_name = function_call.name if function_call else ""
-        return FunctionMessageChunk(content=func_args, name=func_name)
-    elif role or default_class == ChatMessageChunk:
-        return ChatMessageChunk(content=content, role=role)  # type: ignore[arg-type]
+
+        return FunctionMessageChunk(
+            content=func_args,
+            name=func_name,
+        )
+
+    elif role == "tool" or default_class == ToolMessageChunk:
+        return ToolMessageChunk(
+            content=content,
+            tool_call_id=(
+                delta.get("tool_call_id")
+                if isinstance(delta, dict)
+                else getattr(delta, "tool_call_id", None)
+            ),
+        )
+
+    elif default_class == ChatMessageChunk:
+        return ChatMessageChunk(
+            content=content,
+            role=role or "assistant",
+        )
+
     else:
         return default_class(content=content)  # type: ignore[call-arg]
 
@@ -392,7 +452,7 @@ class ChatLiteLLM(BaseChatModel):
     cohere_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
     api_key: Optional[str] = None
-    streaming: bool = False
+    streaming: bool | None = None
     api_base: Optional[str] = None
     """Endpoint override for the upstream provider.
 
@@ -444,7 +504,7 @@ class ChatLiteLLM(BaseChatModel):
             "model": set_model_value,
             "timeout": self.request_timeout,
             "max_tokens": self.max_tokens,
-            "stream": self.streaming,
+            "stream": self.streaming if self.streaming is not None else False,
             "n": self.n,
             "temperature": self.temperature,
             "top_p": self.top_p,
@@ -554,7 +614,7 @@ class ChatLiteLLM(BaseChatModel):
         stream: Optional[bool] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        should_stream = stream if stream is not None else self.streaming
+        should_stream = stream if stream is not None else bool(self.streaming)
         if should_stream:
             stream_iter = self._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
@@ -759,7 +819,7 @@ class ChatLiteLLM(BaseChatModel):
         stream: Optional[bool] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        should_stream = stream if stream is not None else self.streaming
+        should_stream = stream if stream is not None else bool(self.streaming)
         if should_stream:
             stream_iter = self._astream(
                 messages=messages, stop=stop, run_manager=run_manager, **kwargs
@@ -875,6 +935,8 @@ class ChatLiteLLM(BaseChatModel):
 
         parser: Runnable[Any, Any]
         pre_parser: Callable[[AIMessage], AIMessage] | None = None
+        bind_kwargs: dict[str, Any] = {}
+
         if method == "function_calling":
             # Determine appropriate tool_choice based on model
             # Use "required" for most models, which is more widely supported than "any"
@@ -907,7 +969,14 @@ class ChatLiteLLM(BaseChatModel):
                 parser = PydanticToolsParser(
                     tools=[cast(TypeBaseModel, schema)], first_tool_only=True
                 )
-                llm = self.bind_tools([schema], **bind_kwargs)
+                llm = self.bind_tools(
+                    [schema],
+                    ls_structured_output_format={
+                        "kwargs": {"method": "function_calling"},
+                        "schema": schema,
+                    },
+                    **bind_kwargs,
+                )
             # dict or typeddict
             elif is_typeddict(schema) or isinstance(schema, dict):
                 tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
@@ -915,12 +984,20 @@ class ChatLiteLLM(BaseChatModel):
                 parser = JsonOutputKeyToolsParser(
                     key_name=function_name, first_tool_only=True
                 )
-                llm = self.bind_tools([tool_def], **bind_kwargs)
+                llm = self.bind_tools(
+                    [schema],
+                    ls_structured_output_format={
+                        "kwargs": {"method": "function_calling"},
+                        "schema": schema,
+                    },
+                    **bind_kwargs,
+                )
             else:
                 msg = f"Unsupported schema type {type(schema)}"
                 raise ValueError(msg)
 
         elif method == "json_schema":
+            bind_kwargs = {}
             if strict is None:
                 strict_flag = True
             else:
@@ -948,7 +1025,12 @@ class ChatLiteLLM(BaseChatModel):
                         "schema": json_schema,
                         "strict": strict_flag,
                     },
-                }
+                },
+                ls_structured_output_format={
+                    "kwargs": {"method": "json_schema"},
+                    "schema": schema,
+                },
+                **bind_kwargs,
             )
 
         elif method == "json_mode":
@@ -959,7 +1041,14 @@ class ChatLiteLLM(BaseChatModel):
                 parser = JsonOutputParser()
 
             # Setup LLM with json_mode (simpler than json_schema)
-            llm = self.bind(response_format={"type": "json_object"})
+            llm = self.bind(
+                response_format={"type": "json_object"},
+                ls_structured_output_format={
+                    "kwargs": {"method": "json_mode"},
+                    "schema": schema,
+                },
+                **bind_kwargs,
+            )
 
         else:
             msg = f"Unsupported method '{method}'. Must be 'json_schema', 'function_calling', or 'json_mode'"
@@ -1013,7 +1102,7 @@ class ChatLiteLLM(BaseChatModel):
         """
         params = super()._get_ls_params(stop=stop, **kwargs)
         params["ls_provider"] = "litellm"
-        params["ls_model_name"] = self.model_name or self.model
+        params["ls_model_name"] = kwargs.get("model") or self.model_name or self.model
         return params
 
     @property
@@ -1092,25 +1181,33 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     return usage_metadata
 
 
-def _ensure_additional_properties_false(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively ensure additionalProperties is set to false for all objects."""
-    if isinstance(schema_dict, dict):
-        result = schema_dict.copy()
+def _ensure_additional_properties_false(
+    schema_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Make object schemas compatible with strict structured output."""
 
-        if result.get("type") == "object":
-            result["additionalProperties"] = False
+    if not isinstance(schema_dict, dict):
+        return schema_dict
 
-        for key, value in result.items():
-            if isinstance(value, dict):
-                result[key] = _ensure_additional_properties_false(value)
-            elif isinstance(value, list):
-                result[key] = [
-                    _ensure_additional_properties_false(item)
-                    if isinstance(item, dict)
-                    else item
-                    for item in value
-                ]
+    result = schema_dict.copy()
 
-        return result
+    if result.get("type") == "object":
+        result["additionalProperties"] = False
 
-    return schema_dict
+        properties = result.get("properties")
+
+        if isinstance(properties, dict):
+            result["required"] = list(properties.keys())
+
+    for key, value in result.items():
+        if isinstance(value, dict):
+            result[key] = _ensure_additional_properties_false(value)
+        elif isinstance(value, list):
+            result[key] = [
+                _ensure_additional_properties_false(item)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+
+    return result
