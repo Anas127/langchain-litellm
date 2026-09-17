@@ -179,7 +179,7 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
                             invalid_tool_calls.append(
                                 invalid_tool_call(
                                     name=func_name or "",
-                                    args=str(func_args),
+                                    args=json.dumps(func_args),
                                     id=tc_id,
                                     error=None,
                                 )
@@ -341,7 +341,10 @@ def _convert_delta_to_message_chunk(
         )
 
     else:
-        return default_class(content=content)  # type: ignore[call-arg]
+        return ChatMessageChunk(
+            content=content,
+            role=role or "assistant",
+        )  # type: ignore[call-arg]
 
 
 def _lc_tool_call_to_openai_tool_call(tool_call: ToolCall) -> Dict[str, Any]:
@@ -1186,6 +1189,7 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
 
 def _ensure_additional_properties_false(
     schema_dict: Dict[str, Any],
+    strict: bool = True,
 ) -> Dict[str, Any]:
     """Make object schemas compatible with strict structured output."""
 
@@ -1199,15 +1203,21 @@ def _ensure_additional_properties_false(
 
         properties = result.get("properties")
 
-        if isinstance(properties, dict):
+        if isinstance(properties, dict) and strict:
             result["required"] = list(properties.keys())
 
     for key, value in result.items():
         if isinstance(value, dict):
-            result[key] = _ensure_additional_properties_false(value)
+            result[key] = _ensure_additional_properties_false(
+                value,
+                strict=strict,
+            )
         elif isinstance(value, list):
             result[key] = [
-                _ensure_additional_properties_false(item)
+                _ensure_additional_properties_false(
+                    item,
+                    strict=strict,
+                )
                 if isinstance(item, dict)
                 else item
                 for item in value
