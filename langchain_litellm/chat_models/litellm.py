@@ -1018,7 +1018,10 @@ class ChatLiteLLM(BaseChatModel):
             # Setup LLM with json_schema
             tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
             raw_schema = tool_def["function"]["parameters"]
-            json_schema = _ensure_additional_properties_false(raw_schema)
+            json_schema = _ensure_additional_properties_false(
+                raw_schema,
+                strict=strict_flag,
+            )
 
             # Safe schema name extraction
             schema_name = getattr(schema, "__name__", tool_def["function"]["name"])
