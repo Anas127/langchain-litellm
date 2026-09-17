@@ -201,7 +201,8 @@ def _convert_dict_to_message(_dict: Mapping[str, Any]) -> BaseMessage:
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = _dict.get("provider_specific_fields")
         if not provider_specific_fields:
-            provider_specific_fields = _dict.get("vertex_ai_grounding_metadata")
+            provider_specific_fields = _dict.get(
+                "vertex_ai_grounding_metadata")
 
         if provider_specific_fields:
             additional_kwargs["provider_specific_fields"] = provider_specific_fields
@@ -237,7 +238,8 @@ def _convert_delta_to_message_chunk(
         # Check standard field first, then fallback to Vertex-specific field.
         provider_specific_fields = delta.get("provider_specific_fields")
         if not provider_specific_fields:
-            provider_specific_fields = delta.get("vertex_ai_grounding_metadata")
+            provider_specific_fields = delta.get(
+                "vertex_ai_grounding_metadata")
 
     # Read values from LiteLLM Delta objects.
     else:
@@ -248,7 +250,8 @@ def _convert_delta_to_message_chunk(
         reasoning_content = getattr(delta, "reasoning_content", None)
 
         # Check standard field first, then fallback to Vertex-specific field.
-        provider_specific_fields = getattr(delta, "provider_specific_fields", None)
+        provider_specific_fields = getattr(
+            delta, "provider_specific_fields", None)
         if not provider_specific_fields:
             provider_specific_fields = getattr(
                 delta, "vertex_ai_grounding_metadata", None
@@ -310,7 +313,8 @@ def _convert_delta_to_message_chunk(
 
     elif role == "function" or default_class == FunctionMessageChunk:
         if isinstance(delta, dict):
-            func_args = function_call.get("arguments", "") if function_call else ""
+            func_args = function_call.get(
+                "arguments", "") if function_call else ""
             func_name = function_call.get("name", "") if function_call else ""
         else:
             func_args = function_call.arguments if function_call else ""
@@ -324,10 +328,13 @@ def _convert_delta_to_message_chunk(
     elif role == "tool" or default_class == ToolMessageChunk:
         return ToolMessageChunk(
             content=content,
-            tool_call_id=(
-                delta.get("tool_call_id")
-                if isinstance(delta, dict)
-                else getattr(delta, "tool_call_id", None)
+            tool_call_id=cast(
+                str,
+                (
+                    delta.get("tool_call_id")
+                    if isinstance(delta, dict)
+                    else getattr(delta, "tool_call_id", None)
+                ),
             ),
         )
 
@@ -532,7 +539,8 @@ class ChatLiteLLM(BaseChatModel):
         self, run_manager: Optional[CallbackManagerForLLMRun] = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the completion call."""
-        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+        retry_decorator = _create_retry_decorator(
+            self, run_manager=run_manager)
 
         @retry_decorator
         def _completion_with_retry(**kwargs: Any) -> Any:
@@ -544,7 +552,8 @@ class ChatLiteLLM(BaseChatModel):
         self, run_manager: Optional[AsyncCallbackManagerForLLMRun] = None, **kwargs: Any
     ) -> Any:
         """Use tenacity to retry the async completion call."""
-        retry_decorator = _create_retry_decorator(self, run_manager=run_manager)
+        retry_decorator = _create_retry_decorator(
+            self, run_manager=run_manager)
 
         @retry_decorator
         async def _completion_with_retry(**kwargs: Any) -> Any:
@@ -654,7 +663,8 @@ class ChatLiteLLM(BaseChatModel):
         # Check standard field first, then fallback to Vertex specific field
         provider_specific_fields = response.get("provider_specific_fields")
         if not provider_specific_fields:
-            provider_specific_fields = response.get("vertex_ai_grounding_metadata")
+            provider_specific_fields = response.get(
+                "vertex_ai_grounding_metadata")
 
         # Add provider_specific_fields if present at response level
         if provider_specific_fields:
@@ -667,7 +677,8 @@ class ChatLiteLLM(BaseChatModel):
         params = self._client_params
         if stop is not None:
             if "stop" in params:
-                raise ValueError("`stop` found in both the input and default params.")
+                raise ValueError(
+                    "`stop` found in both the input and default params.")
             params["stop"] = stop
         message_dicts = [_convert_message_to_dict(m) for m in messages]
         return message_dicts, params
@@ -979,13 +990,14 @@ class ChatLiteLLM(BaseChatModel):
                 )
             # dict or typeddict
             elif is_typeddict(schema) or isinstance(schema, dict):
-                tool_def = convert_to_openai_tool(schema)  # type: ignore[arg-type]
+                tool_def = convert_to_openai_tool(
+                    schema)  # type: ignore[arg-type]
                 function_name = tool_def["function"]["name"]
                 parser = JsonOutputKeyToolsParser(
                     key_name=function_name, first_tool_only=True
                 )
                 llm = self.bind_tools(
-                    [schema],
+                    [cast(Any, schema)],
                     ls_structured_output_format={
                         "kwargs": {"method": "function_calling"},
                         "schema": schema,
@@ -1015,7 +1027,8 @@ class ChatLiteLLM(BaseChatModel):
             json_schema = _ensure_additional_properties_false(raw_schema)
 
             # Safe schema name extraction
-            schema_name = getattr(schema, "__name__", tool_def["function"]["name"])
+            schema_name = getattr(schema, "__name__",
+                                  tool_def["function"]["name"])
 
             llm = self.bind(
                 response_format={
@@ -1102,7 +1115,8 @@ class ChatLiteLLM(BaseChatModel):
         """
         params = super()._get_ls_params(stop=stop, **kwargs)
         params["ls_provider"] = "litellm"
-        params["ls_model_name"] = kwargs.get("model") or self.model_name or self.model
+        params["ls_model_name"] = kwargs.get(
+            "model") or self.model_name or self.model
         return params
 
     @property
@@ -1130,7 +1144,8 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
     output_tokens = int(_get(token_usage, "completion_tokens") or 0)
     _raw_total = _get(token_usage, "total_tokens")
     total_tokens = (
-        int(_raw_total) if _raw_total is not None else (input_tokens + output_tokens)
+        int(_raw_total) if _raw_total is not None else (
+            input_tokens + output_tokens)
     )
 
     # ── input token details (cache) ───────────────────────────────────────
@@ -1170,13 +1185,17 @@ def _create_usage_metadata(token_usage: Any) -> UsageMetadata:
         total_tokens=total_tokens,
     )
 
-    filtered_input = {k: v for k, v in input_token_details.items() if v is not None}
+    filtered_input = {k: v for k,
+                      v in input_token_details.items() if v is not None}
     if filtered_input:
-        usage_metadata["input_token_details"] = InputTokenDetails(**filtered_input)
+        usage_metadata["input_token_details"] = InputTokenDetails(
+            **filtered_input)
 
-    filtered_output = {k: v for k, v in output_token_details.items() if v is not None}
+    filtered_output = {k: v for k,
+                       v in output_token_details.items() if v is not None}
     if filtered_output:
-        usage_metadata["output_token_details"] = OutputTokenDetails(**filtered_output)
+        usage_metadata["output_token_details"] = OutputTokenDetails(
+            **filtered_output)
 
     return usage_metadata
 
