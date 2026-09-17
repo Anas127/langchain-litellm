@@ -87,6 +87,7 @@ def test_convert_dict_to_message_exposes_invalid_tool_call() -> None:
     }
 
     message = _convert_dict_to_message(mock_dict)
+    assert isinstance(message, AIMessage)
 
     assert len(message.invalid_tool_calls) == 1
     invalid_tool_call = message.invalid_tool_calls[0]
@@ -373,7 +374,7 @@ def test_bind_tools_any_becomes_required_without_thinking() -> None:
     llm = ChatLiteLLM(model="anthropic/claude-sonnet-4-20250514", api_key="fake")
     bound = llm.bind_tools([_dummy_tool], tool_choice="any")
     # type: ignore[attr-defined]
-    assert bound.kwargs["tool_choice"] == "required"
+    assert getattr(bound, "kwargs")["tool_choice"] == "required"
 
 
 @pytest.mark.parametrize(
@@ -402,7 +403,8 @@ def test_bind_tools_downgraded_with_thinking(
         logging.WARNING, logger="langchain_litellm.chat_models.litellm"
     ):
         bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
-    assert bound.kwargs["tool_choice"] == "auto"  # type: ignore[attr-defined]
+    # type: ignore[attr-defined]
+    assert getattr(bound, "kwargs")["tool_choice"] == "auto"
     assert "incompatible with thinking" in caplog.text
 
 
@@ -428,7 +430,7 @@ def test_bind_tools_not_downgraded_with_thinking_on_non_claude_models(
     bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
     expected_tool_choice = "required" if tool_choice in ("any", True) else tool_choice
     # type: ignore[attr-defined]
-    assert bound.kwargs["tool_choice"] == expected_tool_choice
+    assert getattr(bound, "kwargs")["tool_choice"] == expected_tool_choice
 
 
 @pytest.mark.parametrize(
@@ -447,7 +449,7 @@ def test_bind_tools_non_forced_unchanged_with_thinking(
     )
     bound = llm.bind_tools([_dummy_tool], tool_choice=tool_choice)
     # type: ignore[attr-defined]
-    assert bound.kwargs["tool_choice"] == tool_choice
+    assert getattr(bound, "kwargs")["tool_choice"] == tool_choice
 
 
 @pytest.mark.parametrize(
@@ -469,7 +471,7 @@ def test_bind_tools_no_downgrade_without_thinking_enabled(
     )
     bound = llm.bind_tools([_dummy_tool], tool_choice="any")
     # type: ignore[attr-defined]
-    assert bound.kwargs["tool_choice"] == "required"
+    assert getattr(bound, "kwargs")["tool_choice"] == "required"
 
 
 def test_bind_tools_dict_validation_with_thinking() -> None:
@@ -493,8 +495,9 @@ def test_with_structured_output_function_calling_warns_and_raises_for_claude_thi
     bind_kwargs: dict[str, Any] = {}
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        # type: ignore[override]
-        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        def bind_tools(  # type: ignore[override]
+            self, tools: Any, **kwargs: Any
+        ) -> Any:
             bind_kwargs.update(kwargs)
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
@@ -518,8 +521,9 @@ def test_with_structured_output_include_raw_preserves_raw_for_claude_thinking() 
     """`include_raw` should surface the parsing error without dropping the raw message."""
 
     class _FakeChatLiteLLM(ChatLiteLLM):
-        # type: ignore[override]
-        def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
+        def bind_tools(  # type: ignore[override]
+            self, tools: Any, **kwargs: Any
+        ) -> Any:  # type: ignore[override]
             return RunnableLambda(lambda _: AIMessage(content="plain text"))
 
     llm = _FakeChatLiteLLM(
